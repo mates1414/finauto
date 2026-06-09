@@ -1,0 +1,126 @@
+{
+  "ticker": "DEMO.IS",
+  "name": "Demo Havacılık A.Ş.",
+  "currency": "TRY",
+  "units": "thousands",
+  "sector_hint": "Airlines / Transportation",
+  "source": "fixture",
+  "periods": [
+    {
+      "year": 2022,
+      "income_statement": {
+        "revenue": 60000000,
+        "cogs": 45000000,
+        "gross_profit": null,
+        "sga": 6500000,
+        "ebitda": null,
+        "depreciation_amortization": 3000000,
+        "ebit": 5500000,
+        "net_interest_expense": 1400000,
+        "net_income": 3100000
+      },
+      "balance_sheet": {
+        "cash_and_equivalents": 8000000,
+        "total_current_assets": 20000000,
+        "total_assets": 55000000,
+        "short_term_debt": 4000000,
+        "long_term_debt": 12000000,
+        "lease_liabilities": 6000000,
+        "total_liabilities": 35000000,
+        "retained_earnings": 9000000,
+        "total_equity": 20000000
+      },
+      "cash_flow": {
+        "depreciation_amortization": 3000000,
+        "capex": 4200000
+      }
+    },
+    {
+      "year": 2023,
+      "income_statement": {
+        "revenue": 84000000,
+        "cogs": 62500000,
+        "gross_profit": null,
+        "sga": 9000000,
+        "ebitda": 12500000,
+        "depreciation_amortization": 3800000,
+        "ebit": 8700000,
+        "net_interest_expense": 2100000,
+        "net_income": 5000000
+      },
+      "balance_sheet": {
+        "cash_and_equivalents": 10500000,
+        "total_current_assets": 27000000,
+        "total_assets": 72000000,
+        "short_term_debt": 5500000,
+        "long_term_debt": 15000000,
+        "lease_liabilities": 8000000,
+        "total_liabilities": 46000000,
+        "retained_earnings": 13000000,
+        "total_equity": 26000000
+      },
+      "cash_flow": {
+        "depreciation_amortization": 3800000,
+        "capex": 5900000
+      }
+    },
+    {
+      "year": 2024,
+      "income_statement": {
+        "revenue": 113000000,
+        "cogs": 83500000,
+        "gross_profit": null,
+        "sga": 12200000,
+        "ebitda": 17300000,
+        "depreciation_amortization": 4900000,
+        "ebit": 12400000,
+        "net_interest_expense": 2600000,
+        "net_income": 7400000
+      },
+      "balance_sheet": {
+        "cash_and_equivalents": 14000000,
+        "total_current_assets": 36000000,
+        "total_assets": 95000000,
+        "short_term_debt": 7000000,
+        "long_term_debt": 19500000,
+        "lease_liabilities": 10500000,
+        "total_liabilities": 60000000,
+        "retained_earnings": 19000000,
+        "total_equity": 35000000
+      },
+      "cash_flow": {
+        "depreciation_amortization": 4900000,
+        "capex": 7900000
+      }
+    },
+    {
+      "year": 2025,
+      "income_statement": {
+        "revenue": 145000000,
+        "cogs": 106000000,
+        "gross_profit": null,
+        "sga": 15500000,
+        "ebitda": 23500000,
+        "depreciation_amortization": 6200000,
+        "ebit": 17300000,
+        "net_interest_expense": 3100000,
+        "net_income": 10400000
+      },
+      "balance_sheet": {
+        "cash_and_equivalents": 18500000,
+        "total_current_assets": 47000000,
+        "total_assets": 124000000,
+        "short_term_debt": 8500000,
+        "long_term_debt": 24000000,
+        "lease_liabilities": 13500000,
+        "total_liabilities": 76000000,
+        "retained_earnings": 27500000,
+        "total_equity": 48000000
+      },
+      "cash_flow": {
+        "depreciation_amortization": 6200000,
+        "capex": 10100000
+      }
+    }
+  ]
+}
