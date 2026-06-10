@@ -7,6 +7,7 @@ dist/
 .env
 .pytest_cache/
 data/
+results/
 *.xlsx
 !tests/fixtures/*.xlsx
 samples/*.pdf

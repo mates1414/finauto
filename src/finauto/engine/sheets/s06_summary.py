@@ -15,6 +15,13 @@ _R_UPSIDE = 10
 _R_SIGNAL = 11
 _R_FX = 13
 
+# Hidden helper columns: per-row (scalar) conversion of each method's price/weight
+# to a number, so the weighted average can use a plain SUMPRODUCT. Doing the
+# ISNUMBER test cell-by-cell (not over a range) avoids Excel inserting the
+# implicit-intersection "@" that breaks array logic inside IF/ISNUMBER.
+_COL_HELP_PX = 4  # E: price if numeric, else 0
+_COL_HELP_W = 5   # F: weight if the method produced a numeric price, else 0
+
 TARGET_PRICE_CELL = a1(_R_TARGET, 1, abs_row=True, abs_col=True)
 
 
@@ -23,6 +30,7 @@ def build(ws, ctx: BuildContext) -> None:
 
     ws.set_column(0, 0, 32)
     ws.set_column(1, 2, 15)
+    ws.set_column(_COL_HELP_PX, _COL_HELP_W, None, None, {"hidden": True})
     ws.write(0, 0, L("s06.title"), st.title)
 
     ws.write(_HEAD, 0, L("s06.col_method"), st.colhead)
@@ -43,19 +51,26 @@ def build(ws, ctx: BuildContext) -> None:
     ws.write_formula(_R_EV_SALES, 1, "=PriceEVSales", st.price)
     ws.write_number(_R_EV_SALES, 2, 0.0, st.input_pct)
 
-    prices = f"{a1(_R_DCF, 1)}:{a1(_R_EV_SALES, 1)}"
+    # Per-row helper cells (scalar IF — no @ implicit-intersection problem):
+    #   E = price if numeric else 0,   F = weight if price numeric else 0
+    for r in (_R_DCF, _R_EV_EBITDA, _R_PE, _R_EV_SALES):
+        b, c = a1(r, 1), a1(r, 2)
+        ws.write_formula(r, _COL_HELP_PX, f"=IF(ISNUMBER({b}),{b},0)", st.price)
+        ws.write_formula(r, _COL_HELP_W, f"=IF(ISNUMBER({b}),{c},0)", st.pct)
+
+    help_px = f"{a1(_R_DCF, _COL_HELP_PX)}:{a1(_R_EV_SALES, _COL_HELP_PX)}"
+    help_w = f"{a1(_R_DCF, _COL_HELP_W)}:{a1(_R_EV_SALES, _COL_HELP_W)}"
     weights = f"{a1(_R_DCF, 2)}:{a1(_R_EV_SALES, 2)}"
     target = a1(_R_TARGET, 1)
     current = a1(_R_CURRENT, 1)
     upside = a1(_R_UPSIDE, 1)
 
-    # weighted average over the methods that produced a price: N() turns blank
-    # ("") results into 0 and the denominator keeps only available weights
+    # Weighted average over only the methods that produced a numeric price.
+    # Plain SUMPRODUCT/SUM over the numeric helper columns — no array logic
+    # inside scalar functions, so it is immune to the "@" rewrite and works in
+    # every Excel version.
     ws.write(_R_TARGET, 0, L("s06.weighted_target"), st.label_bold)
-    weighted = (
-        f'SUMPRODUCT(N({prices}),{weights})'
-        f'/SUMPRODUCT(--({prices}<>""),{weights})'
-    )
+    weighted = f"SUMPRODUCT({help_px},{weights})/SUM({help_w})"
     ws.write_formula(_R_TARGET, 1, f"={iferror(weighted)}", st.price_bold)
 
     ws.write(_R_CURRENT, 0, L("s06.current_price"), st.label)

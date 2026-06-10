@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Literal
 
+from dotenv import load_dotenv
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -24,4 +25,7 @@ class Settings(BaseSettings):
 
 
 def get_settings() -> Settings:
+    # Load .env into os.environ so the provider SDKs (google-genai reads
+    # GEMINI_API_KEY, anthropic reads ANTHROPIC_API_KEY) can find their keys.
+    load_dotenv()
     return Settings()

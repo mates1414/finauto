@@ -28,6 +28,13 @@ _KEYWORDS = (
 
 
 def load_pdf_bytes(path: Path, max_pages: int = MAX_PAGES) -> bytes:
+    header = path.read_bytes()[:5]
+    if header[:4] != b"%PDF":
+        raise ValueError(
+            f"{path} is not a valid PDF (header={header!r}, expected b'%PDF-'). "
+            "The file is likely corrupted or saved in the wrong format — "
+            "re-download the report PDF from KAP and try again."
+        )
     reader = PdfReader(str(path))
     n = len(reader.pages)
     if n <= max_pages:

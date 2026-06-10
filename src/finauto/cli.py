@@ -18,6 +18,8 @@ from .validation.sector_guard import SectorNotSupportedError, check_sector
 app = typer.Typer(help="FinAuto-Valuation Engine: PDF financials -> Excel valuation model", no_args_is_help=True)
 console = Console()
 
+RESULTS_DIR = Path("results")
+
 
 def _peer_list(peers: str) -> list[str]:
     return [p.strip() for p in peers.split(",") if p.strip()]
@@ -27,11 +29,29 @@ def _slug(ticker: str) -> str:
     return ticker.replace(".", "_")
 
 
+def _results_dir(ticker: str) -> Path:
+    """Per-company output folder: results/<TICKER>/ (created on demand)."""
+    d = RESULTS_DIR / _slug(ticker)
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
 def _print_warnings(warnings: list[str], title: str) -> None:
     if warnings:
         console.print(f"[yellow]{title}:[/]")
         for w in warnings:
             console.print(f"  [yellow]- {w}[/]")
+
+
+def _run_extraction(settings, pdfs: list[Path], ticker: str):
+    """Extract financials, turning expected failures into clean CLI errors."""
+    from .ingestion.base import ExtractionError, get_extractor
+
+    try:
+        return get_extractor(settings).extract(list(pdfs), ticker)
+    except (ExtractionError, ValueError) as e:
+        console.print(f"[red]Extraction failed:[/] {e}")
+        raise typer.Exit(code=1)
 
 
 @app.command()
@@ -45,11 +65,10 @@ def extract(
     settings = get_settings()
     if provider:
         settings.llm_provider = provider  # type: ignore[assignment]
-    from .ingestion.base import get_extractor
 
     console.print(f"Extracting {len(pdfs)} PDF(s) for [bold]{ticker}[/] via {settings.llm_provider}...")
-    fin = get_extractor(settings).extract(list(pdfs), ticker)
-    out = output or Path(f"{_slug(ticker)}_financials.json")
+    fin = _run_extraction(settings, list(pdfs), ticker)
+    out = output or _results_dir(ticker) / "financials.json"
     out.write_text(fin.model_dump_json(indent=2), encoding="utf-8")
     _print_warnings(financials_gap_report(fin), "Missing line items (blank cells in the model)")
     console.print(f"[green]Wrote {out}[/]")
@@ -72,7 +91,7 @@ def market(
     except SectorNotSupportedError as e:
         console.print(f"[red]{e}[/]")
         raise typer.Exit(code=2)
-    out = output or Path(f"{_slug(ticker)}_market.json")
+    out = output or _results_dir(ticker) / "market.json"
     out.write_text(data.model_dump_json(indent=2), encoding="utf-8")
     _print_warnings(market_warnings(data), "Market data gaps")
     console.print(f"[green]Wrote {out}[/]")
@@ -109,7 +128,7 @@ def build(
         assumptions=asm,
         locale=(locale or settings.locale),  # type: ignore[arg-type]
     )
-    out = output or Path(f"{_slug(fin.ticker)}_valuation.xlsx")
+    out = output or _results_dir(fin.ticker) / f"{_slug(fin.ticker)}_valuation.xlsx"
     path = build_workbook(inputs, out)
     console.print(f"[green]Workbook written: {path}[/]")
     console.print("Open in Excel; change cells on 01_Assumptions to recompute the target price on 06_Valuation_Summary.")
@@ -130,12 +149,12 @@ def run(
     settings = get_settings()
     if provider:
         settings.llm_provider = provider  # type: ignore[assignment]
-    from .ingestion.base import get_extractor
     from .marketdata.yahoo import fetch_market_data
 
     console.print(f"[1/3] Extracting financials for [bold]{ticker}[/]...")
-    fin = get_extractor(settings).extract(list(pdfs), ticker)
-    fin_path = Path(f"{_slug(ticker)}_financials.json")
+    fin = _run_extraction(settings, list(pdfs), ticker)
+    rdir = _results_dir(ticker)
+    fin_path = rdir / "financials.json"
     fin_path.write_text(fin.model_dump_json(indent=2), encoding="utf-8")
 
     console.print("[2/3] Fetching market data...")
@@ -145,7 +164,7 @@ def run(
     except SectorNotSupportedError as e:
         console.print(f"[red]{e}[/]")
         raise typer.Exit(code=2)
-    mkt_path = Path(f"{_slug(ticker)}_market.json")
+    mkt_path = rdir / "market.json"
     mkt_path.write_text(mkt.model_dump_json(indent=2), encoding="utf-8")
 
     console.print("[3/3] Building workbook...")
@@ -157,7 +176,7 @@ def run(
         assumptions=derive_assumptions(fin, overrides),
         locale=(locale or settings.locale),  # type: ignore[arg-type]
     )
-    out = output or Path(f"{_slug(ticker)}_valuation.xlsx")
+    out = output or rdir / f"{_slug(ticker)}_valuation.xlsx"
     path = build_workbook(inputs, out)
     console.print(f"[green]Done: {path}[/] (intermediates: {fin_path}, {mkt_path})")
 
