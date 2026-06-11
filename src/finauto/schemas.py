@@ -61,6 +61,22 @@ class FiscalYearData(BaseModel):
     cash_flow: CashFlowItems = Field(default_factory=CashFlowItems)
 
 
+def _merge_periods(base: FiscalYearData, other: FiscalYearData) -> FiscalYearData:
+    """Combine two same-year periods, keeping the first non-None value per field.
+
+    When several reports cover the same fiscal year (overlapping annual reports),
+    `base` (seen first) wins; `other` only fills fields `base` left blank.
+    """
+    merged = base.model_copy(deep=True)
+    for sec_name in ("income_statement", "balance_sheet", "cash_flow"):
+        base_sec = getattr(merged, sec_name)
+        other_sec = getattr(other, sec_name)
+        for fname in type(base_sec).model_fields:
+            if getattr(base_sec, fname) is None and getattr(other_sec, fname) is not None:
+                setattr(base_sec, fname, getattr(other_sec, fname))
+    return merged
+
+
 class CompanyFinancials(BaseModel):
     ticker: str
     name: Optional[str] = None
@@ -72,6 +88,23 @@ class CompanyFinancials(BaseModel):
 
     def sorted_periods(self) -> list[FiscalYearData]:
         return sorted(self.periods, key=lambda p: p.year)
+
+    def deduped_periods(self) -> list[FiscalYearData]:
+        """Merge any same-year periods into one, sorted by year ascending.
+
+        Feeding several overlapping reports can yield duplicate fiscal years;
+        this collapses them (first-seen wins, blanks filled from later copies)
+        so the model gets exactly one column per distinct year.
+        """
+        by_year: dict[int, FiscalYearData] = {}
+        for p in self.periods:
+            existing = by_year.get(p.year)
+            by_year[p.year] = _merge_periods(existing, p) if existing else p
+        return [by_year[y] for y in sorted(by_year)]
+
+    def with_deduped_periods(self) -> "CompanyFinancials":
+        """Return a copy whose `periods` are deduped/merged by year."""
+        return self.model_copy(update={"periods": self.deduped_periods()})
 
     @property
     def latest(self) -> FiscalYearData:
@@ -131,6 +164,34 @@ class MarketData(BaseModel):
     peers: list[TickerSnapshot] = Field(default_factory=list)
 
 
+class IndustryBeta(BaseModel):
+    """One row of Damodaran's industry beta table (a sector average).
+
+    Used to source the WACC's unlevered beta from a robust sector reference
+    instead of noisy per-ticker yfinance betas. The engine relevers this at the
+    target's own D/E, so only the unlevered figures are load-bearing.
+    """
+
+    industry: str
+    n_firms: Number = None
+    levered_beta: Number = None
+    de_ratio: Number = None
+    tax_rate: Number = None
+    unlevered_beta: Number = None
+    cash_firm_value: Number = None
+    unlevered_beta_cash_adj: Number = Field(
+        None, description="Unlevered beta corrected for cash (Damodaran's pure-play beta)"
+    )
+    source: Optional[str] = None
+
+    def chosen_unlevered(self, cash_adjusted: bool = True) -> float | None:
+        """The unlevered beta to relever for WACC; cash-adjusted by default,
+        falling back to the standard unlevered beta when it is missing."""
+        if cash_adjusted and self.unlevered_beta_cash_adj is not None:
+            return self.unlevered_beta_cash_adj
+        return self.unlevered_beta
+
+
 class Assumptions(BaseModel):
     """User-tunable valuation inputs; defaults are placeholders meant to be
     overridden via assumptions.yaml, CLI flags, or derived from historicals."""
@@ -158,3 +219,6 @@ class ValuationInputs(BaseModel):
     market: MarketData
     assumptions: Assumptions = Field(default_factory=Assumptions)
     locale: Literal["tr", "en"] = "tr"
+    industry_beta: Optional[IndustryBeta] = Field(
+        None, description="Optional Damodaran sector beta sourcing the WACC's unlevered beta"
+    )

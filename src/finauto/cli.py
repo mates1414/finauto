@@ -48,10 +48,38 @@ def _run_extraction(settings, pdfs: list[Path], ticker: str):
     from .ingestion.base import ExtractionError, get_extractor
 
     try:
-        return get_extractor(settings).extract(list(pdfs), ticker)
+        fin = get_extractor(settings).extract(list(pdfs), ticker)
     except (ExtractionError, ValueError) as e:
         console.print(f"[red]Extraction failed:[/] {e}")
         raise typer.Exit(code=1)
+    # Collapse any same-year duplicates from overlapping reports into one column.
+    return fin.with_deduped_periods()
+
+
+def _resolve_industry_beta(settings, beta_file: Optional[Path], industry: Optional[str]):
+    """Look up the Damodaran sector beta for --industry; warn and fall back to
+    the peer-median beta if the file, library, or industry name is unavailable."""
+    if not industry:
+        return None
+    from .marketdata.damodaran import DamodaranError, find_industry
+
+    path = beta_file or settings.beta_reference_file
+    try:
+        ib = find_industry(path, industry)
+    except FileNotFoundError:
+        console.print(f"[yellow]Beta file not found: {path}; using peer-median beta.[/]")
+        return None
+    except ImportError as e:
+        console.print(f"[yellow]{e}; using peer-median beta.[/]")
+        return None
+    except DamodaranError as e:
+        console.print(f"[yellow]{e} Using peer-median beta.[/]")
+        return None
+    console.print(
+        f"[green]WACC beta from Damodaran:[/] {ib.industry} "
+        f"-> unlevered (cash-adj) {ib.chosen_unlevered():.3f}"
+    )
+    return ib
 
 
 @app.command()
@@ -104,6 +132,12 @@ def build(
     assumptions_file: Optional[Path] = typer.Option(None, "--assumptions", "-a", help="assumptions.yaml overrides"),
     output: Optional[Path] = typer.Option(None, "--output", "-o", help="Output .xlsx path"),
     locale: Optional[str] = typer.Option(None, "--locale", help="Workbook label locale: tr | en"),
+    industry: Optional[str] = typer.Option(
+        None, "--industry", help='Damodaran sector for the WACC beta, e.g. "Retail (Grocery and Food)"'
+    ),
+    beta_file: Optional[Path] = typer.Option(
+        None, "--beta-file", help="Damodaran emerging-markets beta .xls (default: betaemerg.xls)"
+    ),
     force: bool = typer.Option(False, "--force", help="Bypass the financial-sector guard"),
 ) -> None:
     """Build the 6-tab formula-linked Excel valuation model."""
@@ -127,6 +161,7 @@ def build(
         market=mkt,
         assumptions=asm,
         locale=(locale or settings.locale),  # type: ignore[arg-type]
+        industry_beta=_resolve_industry_beta(settings, beta_file, industry),
     )
     out = output or _results_dir(fin.ticker) / f"{_slug(fin.ticker)}_valuation.xlsx"
     path = build_workbook(inputs, out)
@@ -142,6 +177,12 @@ def run(
     assumptions_file: Optional[Path] = typer.Option(None, "--assumptions", "-a"),
     output: Optional[Path] = typer.Option(None, "--output", "-o", help="Output .xlsx path"),
     locale: Optional[str] = typer.Option(None, "--locale"),
+    industry: Optional[str] = typer.Option(
+        None, "--industry", help='Damodaran sector for the WACC beta, e.g. "Retail (Grocery and Food)"'
+    ),
+    beta_file: Optional[Path] = typer.Option(
+        None, "--beta-file", help="Damodaran emerging-markets beta .xls (default: betaemerg.xls)"
+    ),
     provider: Optional[str] = typer.Option(None, "--provider"),
     force: bool = typer.Option(False, "--force"),
 ) -> None:
@@ -175,10 +216,45 @@ def run(
         market=mkt,
         assumptions=derive_assumptions(fin, overrides),
         locale=(locale or settings.locale),  # type: ignore[arg-type]
+        industry_beta=_resolve_industry_beta(settings, beta_file, industry),
     )
     out = output or rdir / f"{_slug(ticker)}_valuation.xlsx"
     path = build_workbook(inputs, out)
     console.print(f"[green]Done: {path}[/] (intermediates: {fin_path}, {mkt_path})")
+
+
+@app.command()
+def betas(
+    query: Optional[str] = typer.Argument(None, help="Case-insensitive substring to filter industries"),
+    beta_file: Optional[Path] = typer.Option(
+        None, "--beta-file", help="Damodaran beta .xls (default: betaemerg.xls)"
+    ),
+) -> None:
+    """List industries in the Damodaran emerging-markets beta reference file."""
+    settings = get_settings()
+    path = beta_file or settings.beta_reference_file
+    from .marketdata.damodaran import load_industry_betas
+
+    try:
+        table = load_industry_betas(path)
+    except (FileNotFoundError, ImportError, ValueError) as e:
+        console.print(f"[red]{e}[/]")
+        raise typer.Exit(code=1)
+
+    def fmt(v: Optional[float]) -> str:
+        return f"{v:.3f}" if v is not None else "  -  "
+
+    shown = 0
+    for name in sorted(table):
+        if query and query.lower() not in name.lower():
+            continue
+        ib = table[name]
+        console.print(
+            f"{name}  [dim](unlev {fmt(ib.unlevered_beta)}, "
+            f"cash-adj {fmt(ib.unlevered_beta_cash_adj)})[/]"
+        )
+        shown += 1
+    console.print(f"[dim]{shown} industries[/]")
 
 
 if __name__ == "__main__":

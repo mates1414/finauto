@@ -22,6 +22,7 @@ ROWS: dict[str, int] = {
     "fcff": 10,
     "df": 11,
     "pv": 12,
+    "fcff_margin": 13,
     "sum_pv": 14,
     "tv": 15,
     "pv_tv": 16,
@@ -50,7 +51,7 @@ def build(ws, ctx: BuildContext, l2: Sheet2Layout) -> Sheet4Layout:
 
     label_order = [
         "year", "t", "revenue", "ebit", "nopat", "da", "capex", "dnwc",
-        "fcff", "df", "pv", "sum_pv", "tv", "pv_tv", "ev", "net_debt",
+        "fcff", "df", "pv", "fcff_margin", "sum_pv", "tv", "pv_tv", "ev", "net_debt",
         "equity_value", "implied_price",
     ]
     bold = {"fcff", "sum_pv", "ev", "equity_value", "implied_price"}
@@ -90,6 +91,7 @@ def build(ws, ctx: BuildContext, l2: Sheet2Layout) -> Sheet4Layout:
         ws.write_formula(ROWS["fcff"], c, f"={nopat}+{da}-{capex}-{dnwc}", st.num_bold)
         ws.write_formula(ROWS["df"], c, f"={iferror(f'1/(1+WACC)^{t_ref}')}", st.factor)
         ws.write_formula(ROWS["pv"], c, f"={iferror(f'{fcff}*{df}')}", st.num)
+        ws.write_formula(ROWS["fcff_margin"], c, f"={iferror(f'{fcff}/{rev}')}", st.pct)
 
     pv_first = a1(ROWS["pv"], _BASE_COL + 1)
     pv_last = a1(ROWS["pv"], _LAST_COL)

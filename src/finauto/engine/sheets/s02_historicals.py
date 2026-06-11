@@ -13,31 +13,36 @@ from ...schemas import FiscalYearData
 from ..context import BuildContext
 from ..formulas import S02, a1, blank_guard, sref
 
-# 0-based sheet rows
+# 0-based sheet rows. Each profitability margin sits directly under the line
+# item it is computed from (e.g. gross_margin right below gross_profit), shown
+# as an italic sub-row; period growth/CapEx ratios stay in the derived block.
 ROWS: dict[str, int] = {
     "revenue": 4,
     "cogs": 5,
     "gross_profit": 6,
-    "sga": 7,
-    "ebitda": 8,
-    "da": 9,
-    "ebit": 10,
-    "net_interest": 11,
-    "net_income": 12,
-    "cash": 15,
-    "current_assets": 16,
-    "total_assets": 17,
-    "st_debt": 18,
-    "lt_debt": 19,
-    "leases": 20,
-    "total_liabilities": 21,
-    "retained": 22,
-    "equity": 23,
-    "capex": 26,
-    "net_debt": 29,
-    "rev_growth": 30,
-    "ebit_margin": 31,
-    "capex_pct": 32,
+    "gross_margin": 7,
+    "sga": 8,
+    "ebitda": 9,
+    "ebitda_margin": 10,
+    "da": 11,
+    "ebit": 12,
+    "ebit_margin": 13,
+    "net_interest": 14,
+    "net_income": 15,
+    "net_margin": 16,
+    "cash": 19,
+    "current_assets": 20,
+    "total_assets": 21,
+    "st_debt": 22,
+    "lt_debt": 23,
+    "leases": 24,
+    "total_liabilities": 25,
+    "retained": 26,
+    "equity": 27,
+    "capex": 30,
+    "net_debt": 33,
+    "rev_growth": 34,
+    "capex_pct": 35,
 }
 
 # hardcoded data rows: row key -> value getter
@@ -116,9 +121,9 @@ def build(ws, ctx: BuildContext) -> Sheet2Layout:
         ws.merge_range(row, 0, row, last_col, L(key), st.section)
 
     section(3, "s02.is_header")
-    section(14, "s02.bs_header")
-    section(25, "s02.cf_header")
-    section(28, "s02.derived_header")
+    section(18, "s02.bs_header")
+    section(29, "s02.cf_header")
+    section(32, "s02.derived_header")
 
     label_keys = {
         "revenue": "s02.revenue", "cogs": "s02.cogs", "gross_profit": "s02.gross_profit",
@@ -130,11 +135,18 @@ def build(ws, ctx: BuildContext) -> Sheet2Layout:
         "total_liabilities": "s02.total_liabilities", "retained": "s02.retained",
         "equity": "s02.equity", "capex": "s02.capex", "net_debt": "s02.net_debt",
         "rev_growth": "s02.rev_growth", "ebit_margin": "s02.ebit_margin",
-        "capex_pct": "s02.capex_pct",
+        "capex_pct": "s02.capex_pct", "gross_margin": "s02.gross_margin",
+        "ebitda_margin": "s02.ebitda_margin", "net_margin": "s02.net_margin",
     }
     bold_rows = {"gross_profit", "ebitda", "ebit", "net_income", "total_assets", "equity", "net_debt"}
+    margin_rows = {"gross_margin", "ebitda_margin", "ebit_margin", "net_margin"}
     for key, row in ROWS.items():
-        fmt = st.label_bold if key in bold_rows else st.label
+        if key in margin_rows:
+            fmt = st.note  # italic gray: a sub-metric of the line above it
+        elif key in bold_rows:
+            fmt = st.label_bold
+        else:
+            fmt = st.label
         ws.write(row, 0, L(label_keys[key]), fmt)
 
     for p in periods:
@@ -178,6 +190,24 @@ def build(ws, ctx: BuildContext) -> Sheet2Layout:
         ws.write_formula(
             ROWS["capex_pct"], c,
             f"={blank_guard([capex, rev], f'{capex}/{rev}')}",
+            st.pct,
+        )
+        gross = a1(ROWS["gross_profit"], c)
+        ebitda = a1(ROWS["ebitda"], c)
+        net_income = a1(ROWS["net_income"], c)
+        ws.write_formula(
+            ROWS["gross_margin"], c,
+            f"={blank_guard([rev], f'{gross}/{rev}')}",
+            st.pct,
+        )
+        ws.write_formula(
+            ROWS["ebitda_margin"], c,
+            f"={blank_guard([ebitda, rev], f'{ebitda}/{rev}')}",
+            st.pct,
+        )
+        ws.write_formula(
+            ROWS["net_margin"], c,
+            f"={blank_guard([net_income, rev], f'{net_income}/{rev}')}",
             st.pct,
         )
 

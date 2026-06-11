@@ -126,11 +126,12 @@ def build(ws, ctx: BuildContext, l2: Sheet2Layout) -> Sheet3Layout:
         "weight_e": t0 + 3,
         "weight_d": t0 + 4,
         "target_de": t0 + 5,
-        "relev_beta": t0 + 6,
-        "ke": t0 + 7,
-        "rd_spread": t0 + 8,
-        "rd": t0 + 9,
-        "wacc": t0 + 10,
+        "industry_beta": t0 + 6,
+        "relev_beta": t0 + 7,
+        "ke": t0 + 8,
+        "rd_spread": t0 + 9,
+        "rd": t0 + 10,
+        "wacc": t0 + 11,
     }
     for key, row in rows.items():
         fmt = st.label_bold if key == "wacc" else st.label
@@ -141,6 +142,7 @@ def build(ws, ctx: BuildContext, l2: Sheet2Layout) -> Sheet3Layout:
     we = a1(rows["weight_e"], 1)
     wd = a1(rows["weight_d"], 1)
     tde = a1(rows["target_de"], 1)
+    ind = a1(rows["industry_beta"], 1)
     relev = a1(rows["relev_beta"], 1)
     ke = a1(rows["ke"], 1)
     spread = a1(rows["rd_spread"], 1)
@@ -151,9 +153,24 @@ def build(ws, ctx: BuildContext, l2: Sheet2Layout) -> Sheet3Layout:
     ws.write_formula(rows["weight_e"], 1, f"={iferror(f'{e}/({e}+{d})')}", st.pct)
     ws.write_formula(rows["weight_d"], 1, f"={iferror(f'{d}/({e}+{d})')}", st.pct)
     ws.write_formula(rows["target_de"], 1, f"={iferror(f'{d}/{e}')}", st.beta)
+
+    # Industry unlevered beta (Damodaran): an editable input that, when present,
+    # overrides the noisy peer-median unlevered beta. Clear it to revert to the
+    # peer median. The relever uses whichever is available.
+    ib = ctx.industry_beta
+    if ib is not None and ib.chosen_unlevered() is not None:
+        ws.write_number(rows["industry_beta"], 1, ib.chosen_unlevered(), st.input_beta)
+        note = ib.industry + (f" · {ib.source}" if ib.source else "")
+        ws.write(rows["industry_beta"], 2, note, st.note)
+    else:
+        ws.write_blank(rows["industry_beta"], 1, None, st.input_beta)
+
+    # Effective unlevered beta = industry beta if supplied, else the peer median.
+    eff_unlev = f'IF({ind}="",{median_beta},{ind})'
     ws.write_formula(
         rows["relev_beta"], 1,
-        f"={blank_guard([median_beta, tde], f'{median_beta}*(1+(1-TaxRate)*{tde})')}",
+        f'=IF(OR({tde}="",AND({ind}="",{median_beta}="")),"",'
+        f'{iferror(f"{eff_unlev}*(1+(1-TaxRate)*{tde})")})',
         st.beta,
     )
     ws.write_formula(

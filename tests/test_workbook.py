@@ -54,10 +54,19 @@ def test_historicals_are_absolute_units(wb):
     ws = wb["02_Historical_Financials"]
     assert ws["B3"].value == 2022 and ws["E3"].value == 2025
     assert ws["B5"].value == pytest.approx(60_000_000 * 1000)  # 2022 revenue
-    assert ws["E16"].value == pytest.approx(18_500_000 * 1000)  # 2025 cash
+    assert ws["E20"].value == pytest.approx(18_500_000 * 1000)  # 2025 cash
     # derived rows are formulas, not values
     assert ws["B7"].value == "=B5-B6"  # gross profit
-    assert ws["E11"].value == "=E9-E10"  # EBIT = EBITDA - D&A
+    assert ws["E13"].value == "=E10-E12"  # EBIT = EBITDA - D&A
+
+
+def test_margins_are_inline_under_line_items(wb):
+    ws = wb["02_Historical_Financials"]
+    # each margin sits on the row directly below the line item it divides by revenue
+    assert ws["B8"].value == '=IF(B5="","",IFERROR(B7/B5,""))'  # gross margin under gross profit (B7)
+    assert ws["B11"].value == '=IF(OR(B10="",B5=""),"",IFERROR(B10/B5,""))'  # EBITDA margin under EBITDA (B10)
+    assert ws["B14"].value == '=IF(B5="","",IFERROR(B13/B5,""))'  # EBIT margin under EBIT (B13)
+    assert ws["B17"].value == '=IF(OR(B16="",B5=""),"",IFERROR(B16/B5,""))'  # net margin under net income (B16)
 
 
 def test_dcf_is_fully_formula_driven(wb):
@@ -76,6 +85,9 @@ def test_dcf_is_fully_formula_driven(wb):
         for cell in row:
             if cell.value is not None:
                 assert isinstance(cell.value, str) and cell.value.startswith("=")
+    # FCFF margin sanity row (openpyxl row 14): FCFF / revenue, guarded
+    assert ws["C14"].value == '=IFERROR(C11/C5,"")'
+    assert ws["B14"].value is None  # year 0 has no FCFF
 
 
 def test_wacc_peer_clamp_and_blank_guards(wb):
@@ -86,6 +98,36 @@ def test_wacc_peer_clamp_and_blank_guards(wb):
     assert "(1-TaxRate)" in unlev
     # median over the 4 peer rows
     assert ws["L9"].value == '=IFERROR(MEDIAN(L5:L8),"")'
+
+
+def test_industry_beta_drives_relevered_beta(inputs, tmp_path):
+    from finauto.engine.builder import build_workbook
+    from finauto.schemas import IndustryBeta
+
+    ib = IndustryBeta(
+        industry="Retail (Grocery and Food)",
+        unlevered_beta=0.7894,
+        unlevered_beta_cash_adj=0.8562,
+        source="Damodaran EM (test)",
+    )
+    path = build_workbook(inputs.model_copy(update={"industry_beta": ib}), tmp_path / "ind.xlsx")
+    ws = openpyxl.load_workbook(path)["03_WACC_Calculation"]
+
+    ind_row = relev_row = None
+    for r in range(1, ws.max_row + 1):
+        lbl = str(ws.cell(r, 1).value or "")
+        if "Damodaran" in lbl:
+            ind_row = r
+        if lbl in ("Kaldıraçlandırılmış Beta", "Relevered Beta"):
+            relev_row = r
+    assert ind_row and relev_row
+
+    # the cash-adjusted unlevered beta is prefilled as an editable input value
+    assert ws.cell(ind_row, 2).value == pytest.approx(0.8562)
+    # relevered beta relevers off the industry cell, with the peer median as fallback
+    ind_coord = ws.cell(ind_row, 2).coordinate  # e.g. "B17"
+    relev = ws.cell(relev_row, 2).value
+    assert ind_coord in relev and "$L$" in relev
 
 
 def test_relative_valuation_references_sheet3(wb):

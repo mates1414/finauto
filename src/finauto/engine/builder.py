@@ -42,6 +42,7 @@ class WorkbookBuilder:
                 market=self.inputs.market,
                 assumptions=self.inputs.assumptions,
                 L=label_getter(self.inputs.locale),
+                industry_beta=self.inputs.industry_beta,
             )
             ws1 = wb.add_worksheet(S01)
             ws2 = wb.add_worksheet(S02)

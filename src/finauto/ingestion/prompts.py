@@ -14,8 +14,10 @@ possibly in Turkish). Extract the consolidated ANNUAL financial statements
 into the requested JSON structure.
 
 Rules:
-1. One entry in `periods` per fiscal year found (use the most recent full
-   years; skip quarterly columns unless they represent a full 12-month period).
+1. Create one entry in `periods` for EVERY distinct fiscal year found across ALL
+   attached PDFs. If the same year appears in more than one PDF, report it ONCE,
+   using the most complete/most detailed figures. Skip quarterly columns unless
+   they represent a full 12-month period.
 2. Report magnitudes exactly as printed and set `units` accordingly
    ("thousands" for "Bin TL", "millions" for "Milyon TL", "units" otherwise).
 3. Sign conventions: `cogs`, `sga`, `capex` and `net_interest_expense` are

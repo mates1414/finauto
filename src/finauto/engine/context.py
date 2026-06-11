@@ -5,7 +5,7 @@ from typing import Callable
 
 import xlsxwriter
 
-from ..schemas import Assumptions, CompanyFinancials, MarketData
+from ..schemas import Assumptions, CompanyFinancials, IndustryBeta, MarketData
 from .styles import Styles
 
 
@@ -17,3 +17,4 @@ class BuildContext:
     market: MarketData
     assumptions: Assumptions
     L: Callable[[str], str]  # label getter for the active locale
+    industry_beta: IndustryBeta | None = None  # optional Damodaran sector beta
