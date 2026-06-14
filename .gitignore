@@ -11,5 +11,3 @@ results/
 *.xlsx
 !tests/fixtures/*.xlsx
 samples/*.pdf
-CLAUDE.md
-GEMINI.md

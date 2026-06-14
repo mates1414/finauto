@@ -1,7 +1,8 @@
-"""FinAuto CLI: extract / market / build / run."""
+"""FinAuto CLI: extract / market / build / run / discover / report."""
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Optional
 
@@ -12,10 +13,17 @@ from .assumptions import derive_assumptions, load_overrides
 from .config import get_settings
 from .engine.builder import build_workbook
 from .schemas import CompanyFinancials, MarketData, ValuationInputs
-from .validation.sanity import financials_gap_report, market_warnings, reconcile_financials
+from .validation.sanity import (
+    financials_gap_report,
+    market_warnings,
+    reconcile_financials,
+)
 from .validation.sector_guard import SectorNotSupportedError, check_sector
 
-app = typer.Typer(help="FinAuto-Valuation Engine: PDF financials -> Excel valuation model", no_args_is_help=True)
+app = typer.Typer(
+    help="FinAuto-Valuation Engine: PDF financials -> Excel valuation model",
+    no_args_is_help=True,
+)
 console = Console()
 
 RESULTS_DIR = Path("results")
@@ -43,6 +51,62 @@ def _print_warnings(warnings: list[str], title: str) -> None:
             console.print(f"  [yellow]- {w}[/]")
 
 
+def _print_peer_suggestions(suggestion) -> None:
+    """Print resolved peers (market-cap ordered) and the dropped audit trail."""
+    resolved = suggestion.resolved()
+    if resolved:
+        console.print("[green]Suggested peers (validated against live data):[/]")
+        for c in resolved:
+            cap = f"{c.market_cap:,.0f}" if c.market_cap is not None else "n/a"
+            rationale = f" — {c.rationale}" if c.rationale else ""
+            console.print(
+                f"  [green]{c.ticker}[/] ({c.name}) · mktcap {cap}{rationale}"
+            )
+    else:
+        console.print(
+            "[yellow]No peers could be validated against live market data.[/]"
+        )
+    if suggestion.dropped:
+        console.print("[dim]Dropped (unverified / hallucinated):[/]")
+        for d in suggestion.dropped:
+            console.print(f"  [dim]- {d}[/]")
+
+
+def _discover_peers(settings, *, ticker, name, sector, n):
+    """Run discovery + live validation; returns the PeerSuggestionSet."""
+    from .marketdata.web_research import (
+        PeerResearchError,
+        get_peer_researcher,
+        resolve_and_validate,
+    )
+
+    target = name or ticker
+    provider, _model = settings.stage("discover")
+    console.print(f"Researching peers for [bold]{target}[/] via {provider}...")
+    try:
+        suggestion = get_peer_researcher(settings).discover(target, sector=sector, n=n)
+    except (PeerResearchError, ValueError) as e:
+        console.print(f"[red]Peer discovery failed:[/] {e}")
+        raise typer.Exit(code=1)
+    return resolve_and_validate(suggestion)
+
+
+def _auto_peers(settings, *, ticker, name, sector, n, assume_yes) -> list[str]:
+    """Discover, validate, confirm, and return accepted peer tickers (invariant #7)."""
+    suggestion = _discover_peers(settings, ticker=ticker, name=name, sector=sector, n=n)
+    _print_peer_suggestions(suggestion)
+    tickers = suggestion.tickers()
+    if not tickers:
+        console.print("[red]No validated peers to use; supply --peers manually.[/]")
+        raise typer.Exit(code=1)
+    if not assume_yes and not typer.confirm(
+        f"Use these {len(tickers)} peers?", default=True
+    ):
+        console.print("[red]Aborted; supply --peers manually.[/]")
+        raise typer.Exit(code=1)
+    return tickers
+
+
 def _run_extraction(settings, pdfs: list[Path], ticker: str):
     """Extract financials, turning expected failures into clean CLI errors."""
     from .ingestion.base import ExtractionError, get_extractor
@@ -56,7 +120,9 @@ def _run_extraction(settings, pdfs: list[Path], ticker: str):
     return fin.with_deduped_periods()
 
 
-def _resolve_industry_beta(settings, beta_file: Optional[Path], industry: Optional[str]):
+def _resolve_industry_beta(
+    settings, beta_file: Optional[Path], industry: Optional[str]
+):
     """Look up the Damodaran sector beta for --industry; warn and fall back to
     the peer-median beta if the file, library, or industry name is unavailable."""
     if not industry:
@@ -67,7 +133,9 @@ def _resolve_industry_beta(settings, beta_file: Optional[Path], industry: Option
     try:
         ib = find_industry(path, industry)
     except FileNotFoundError:
-        console.print(f"[yellow]Beta file not found: {path}; using peer-median beta.[/]")
+        console.print(
+            f"[yellow]Beta file not found: {path}; using peer-median beta.[/]"
+        )
         return None
     except ImportError as e:
         console.print(f"[yellow]{e}; using peer-median beta.[/]")
@@ -84,35 +152,57 @@ def _resolve_industry_beta(settings, beta_file: Optional[Path], industry: Option
 
 @app.command()
 def extract(
-    pdfs: list[Path] = typer.Argument(..., exists=True, readable=True, help="Financial report PDF(s)"),
-    ticker: str = typer.Option(..., "--ticker", "-t", help="Target ticker, e.g. THYAO.IS"),
-    output: Optional[Path] = typer.Option(None, "--output", "-o", help="Output financials JSON path"),
-    provider: Optional[str] = typer.Option(None, "--provider", help="LLM provider: gemini | claude"),
+    pdfs: list[Path] = typer.Argument(
+        ..., exists=True, readable=True, help="Financial report PDF(s)"
+    ),
+    ticker: str = typer.Option(
+        ..., "--ticker", "-t", help="Target ticker, e.g. THYAO.IS"
+    ),
+    output: Optional[Path] = typer.Option(
+        None, "--output", "-o", help="Output financials JSON path"
+    ),
+    provider: Optional[str] = typer.Option(
+        None, "--provider", help="LLM provider: gemini | claude"
+    ),
 ) -> None:
     """Extract historical financials from PDF report(s) into financials.json."""
     settings = get_settings()
     if provider:
         settings.llm_provider = provider  # type: ignore[assignment]
 
-    console.print(f"Extracting {len(pdfs)} PDF(s) for [bold]{ticker}[/] via {settings.llm_provider}...")
+    console.print(
+        f"Extracting {len(pdfs)} PDF(s) for [bold]{ticker}[/] via {settings.llm_provider}..."
+    )
     fin = _run_extraction(settings, list(pdfs), ticker)
     out = output or _results_dir(ticker) / "financials.json"
     out.write_text(fin.model_dump_json(indent=2), encoding="utf-8")
-    _print_warnings(financials_gap_report(fin), "Missing line items (blank cells in the model)")
+    _print_warnings(
+        financials_gap_report(fin), "Missing line items (blank cells in the model)"
+    )
     console.print(f"[green]Wrote {out}[/]")
 
 
 @app.command()
 def market(
-    ticker: str = typer.Option(..., "--ticker", "-t", help="Target ticker, e.g. THYAO.IS"),
-    peers: str = typer.Option(..., "--peers", "-p", help="Comma-separated peer tickers"),
-    output: Optional[Path] = typer.Option(None, "--output", "-o", help="Output market JSON path"),
-    force: bool = typer.Option(False, "--force", help="Bypass the financial-sector guard"),
+    ticker: str = typer.Option(
+        ..., "--ticker", "-t", help="Target ticker, e.g. THYAO.IS"
+    ),
+    peers: str = typer.Option(
+        ..., "--peers", "-p", help="Comma-separated peer tickers"
+    ),
+    output: Optional[Path] = typer.Option(
+        None, "--output", "-o", help="Output market JSON path"
+    ),
+    force: bool = typer.Option(
+        False, "--force", help="Bypass the financial-sector guard"
+    ),
 ) -> None:
     """Fetch target + peer market snapshots from Yahoo Finance into market.json."""
     from .marketdata.yahoo import fetch_market_data
 
-    console.print(f"Fetching market data for [bold]{ticker}[/] and peers {_peer_list(peers)}...")
+    console.print(
+        f"Fetching market data for [bold]{ticker}[/] and peers {_peer_list(peers)}..."
+    )
     data = fetch_market_data(ticker, _peer_list(peers))
     try:
         check_sector(data.target, force=force)
@@ -127,18 +217,34 @@ def market(
 
 @app.command()
 def build(
-    financials: Path = typer.Option(..., "--financials", "-f", exists=True, help="financials.json from extract"),
-    market_file: Path = typer.Option(..., "--market", "-m", exists=True, help="market.json from market"),
-    assumptions_file: Optional[Path] = typer.Option(None, "--assumptions", "-a", help="assumptions.yaml overrides"),
-    output: Optional[Path] = typer.Option(None, "--output", "-o", help="Output .xlsx path"),
-    locale: Optional[str] = typer.Option(None, "--locale", help="Workbook label locale: tr | en"),
+    financials: Path = typer.Option(
+        ..., "--financials", "-f", exists=True, help="financials.json from extract"
+    ),
+    market_file: Path = typer.Option(
+        ..., "--market", "-m", exists=True, help="market.json from market"
+    ),
+    assumptions_file: Optional[Path] = typer.Option(
+        None, "--assumptions", "-a", help="assumptions.yaml overrides"
+    ),
+    output: Optional[Path] = typer.Option(
+        None, "--output", "-o", help="Output .xlsx path"
+    ),
+    locale: Optional[str] = typer.Option(
+        None, "--locale", help="Workbook label locale: tr | en"
+    ),
     industry: Optional[str] = typer.Option(
-        None, "--industry", help='Damodaran sector for the WACC beta, e.g. "Retail (Grocery and Food)"'
+        None,
+        "--industry",
+        help='Damodaran sector for the WACC beta, e.g. "Retail (Grocery and Food)"',
     ),
     beta_file: Optional[Path] = typer.Option(
-        None, "--beta-file", help="Damodaran emerging-markets beta .xls (default: betaemerg.xls)"
+        None,
+        "--beta-file",
+        help="Damodaran emerging-markets beta .xls (default: betaemerg.xls)",
     ),
-    force: bool = typer.Option(False, "--force", help="Bypass the financial-sector guard"),
+    force: bool = typer.Option(
+        False, "--force", help="Bypass the financial-sector guard"
+    ),
 ) -> None:
     """Build the 6-tab formula-linked Excel valuation model."""
     settings = get_settings()
@@ -166,22 +272,40 @@ def build(
     out = output or _results_dir(fin.ticker) / f"{_slug(fin.ticker)}_valuation.xlsx"
     path = build_workbook(inputs, out)
     console.print(f"[green]Workbook written: {path}[/]")
-    console.print("Open in Excel; change cells on 01_Assumptions to recompute the target price on 06_Valuation_Summary.")
+    console.print(
+        "Open in Excel; change cells on 01_Assumptions to recompute the target price on 06_Valuation_Summary."
+    )
 
 
 @app.command()
 def run(
-    pdfs: list[Path] = typer.Argument(..., exists=True, readable=True, help="Financial report PDF(s)"),
+    pdfs: list[Path] = typer.Argument(
+        ..., exists=True, readable=True, help="Financial report PDF(s)"
+    ),
     ticker: str = typer.Option(..., "--ticker", "-t"),
-    peers: str = typer.Option(..., "--peers", "-p", help="Comma-separated peer tickers"),
+    peers: Optional[str] = typer.Option(
+        None, "--peers", "-p", help="Comma-separated peer tickers"
+    ),
+    auto_peers: bool = typer.Option(
+        False, "--auto-peers", help="Discover + validate peers when --peers is omitted"
+    ),
+    yes: bool = typer.Option(
+        False, "--yes", "-y", help="Accept discovered peers without prompting"
+    ),
     assumptions_file: Optional[Path] = typer.Option(None, "--assumptions", "-a"),
-    output: Optional[Path] = typer.Option(None, "--output", "-o", help="Output .xlsx path"),
+    output: Optional[Path] = typer.Option(
+        None, "--output", "-o", help="Output .xlsx path"
+    ),
     locale: Optional[str] = typer.Option(None, "--locale"),
     industry: Optional[str] = typer.Option(
-        None, "--industry", help='Damodaran sector for the WACC beta, e.g. "Retail (Grocery and Food)"'
+        None,
+        "--industry",
+        help='Damodaran sector for the WACC beta, e.g. "Retail (Grocery and Food)"',
     ),
     beta_file: Optional[Path] = typer.Option(
-        None, "--beta-file", help="Damodaran emerging-markets beta .xls (default: betaemerg.xls)"
+        None,
+        "--beta-file",
+        help="Damodaran emerging-markets beta .xls (default: betaemerg.xls)",
     ),
     provider: Optional[str] = typer.Option(None, "--provider"),
     force: bool = typer.Option(False, "--force"),
@@ -190,6 +314,9 @@ def run(
     settings = get_settings()
     if provider:
         settings.llm_provider = provider  # type: ignore[assignment]
+    if not peers and not auto_peers:
+        console.print("[red]Provide --peers, or pass --auto-peers to discover them.[/]")
+        raise typer.Exit(code=2)
     from .marketdata.yahoo import fetch_market_data
 
     console.print(f"[1/3] Extracting financials for [bold]{ticker}[/]...")
@@ -198,8 +325,23 @@ def run(
     fin_path = rdir / "financials.json"
     fin_path.write_text(fin.model_dump_json(indent=2), encoding="utf-8")
 
+    if peers:
+        peer_tickers = _peer_list(peers)
+    else:
+        peer_tickers = _auto_peers(
+            settings,
+            ticker=ticker,
+            name=fin.name,
+            sector=fin.sector_hint,
+            n=5,
+            assume_yes=yes,
+        )
+        (rdir / "peers.json").write_text(
+            json.dumps(peer_tickers, indent=2), encoding="utf-8"
+        )
+
     console.print("[2/3] Fetching market data...")
-    mkt = fetch_market_data(ticker, _peer_list(peers))
+    mkt = fetch_market_data(ticker, peer_tickers)
     try:
         check_sector(mkt.target, force=force)
     except SectorNotSupportedError as e:
@@ -224,8 +366,121 @@ def run(
 
 
 @app.command()
+def discover(
+    ticker: str = typer.Option(
+        ..., "--ticker", "-t", help="Target ticker, e.g. BIMAS.IS"
+    ),
+    name: Optional[str] = typer.Option(
+        None, "--name", help="Company name (improves the search)"
+    ),
+    sector: Optional[str] = typer.Option(
+        None, "--sector", help="Sector hint to narrow the search"
+    ),
+    count: int = typer.Option(5, "--count", "-n", help="Number of peers to propose"),
+    output: Optional[Path] = typer.Option(
+        None, "--output", "-o", help="Output peers.json path"
+    ),
+    provider: Optional[str] = typer.Option(
+        None, "--provider", help="Discovery provider: gemini | claude"
+    ),
+) -> None:
+    """Discover + validate comparable peers for a target (writes peers.json)."""
+    settings = get_settings()
+    if provider:
+        settings.discover_provider = provider  # type: ignore[assignment]
+    suggestion = _discover_peers(
+        settings, ticker=ticker, name=name, sector=sector, n=count
+    )
+    _print_peer_suggestions(suggestion)
+    out = output or _results_dir(ticker) / "peers.json"
+    out.write_text(suggestion.model_dump_json(indent=2), encoding="utf-8")
+    console.print(
+        f"[green]Wrote {out}[/] ({len(suggestion.tickers())} validated, "
+        f"{len(suggestion.dropped)} dropped)"
+    )
+
+
+@app.command()
+def report(
+    workbook: Path = typer.Argument(
+        ..., exists=True, readable=True, help="Edited valuation .xlsx"
+    ),
+    financials: Optional[Path] = typer.Option(
+        None, "--financials", "-f", help="Original financials.json (for the edit diff)"
+    ),
+    market_file: Optional[Path] = typer.Option(
+        None, "--market", "-m", help="market.json (for peer names)"
+    ),
+    output: Optional[Path] = typer.Option(
+        None, "--out", "-o", help="Output markdown path"
+    ),
+    provider: Optional[str] = typer.Option(
+        None, "--provider", help="Report provider: claude | gemini"
+    ),
+    no_stream: bool = typer.Option(
+        False, "--no-stream", help="Disable streaming generation"
+    ),
+    skip_recalc: bool = typer.Option(
+        False, "--skip-recalc", help="Trust cached values already in the workbook"
+    ),
+) -> None:
+    """Generate a grounded strategic report from a user-corrected workbook."""
+    settings = get_settings()
+    if provider:
+        settings.report_provider = provider  # type: ignore[assignment]
+    from .engine.readback import RecalcError, read_inputs, recalc
+    from .report import build_context, generate, ungrounded_figures
+    from .schemas import CompanyFinancials, MarketData
+
+    # Default the intermediates to the workbook's own results folder.
+    fin_path = financials or (workbook.parent / "financials.json")
+    mkt_path = market_file or (workbook.parent / "market.json")
+    original = (
+        CompanyFinancials.model_validate_json(fin_path.read_text("utf-8"))
+        if fin_path.exists()
+        else None
+    )
+    market = (
+        MarketData.model_validate_json(mkt_path.read_text("utf-8"))
+        if mkt_path.exists()
+        else None
+    )
+    ticker = original.ticker if original else ""
+    name = original.name if original else None
+
+    if skip_recalc:
+        recalced = workbook
+    else:
+        console.print("Recalculating workbook (LibreOffice / formulas)...")
+        try:
+            recalced = recalc(workbook)
+        except RecalcError as e:
+            console.print(f"[red]{e}[/]")
+            raise typer.Exit(code=1)
+
+    fin_edited, _asm, computed = read_inputs(recalced, ticker=ticker, name=name)
+    ctx = build_context(fin_edited, computed, original=original, market=market)
+
+    console.print(f"Generating report via {settings.stage('report')[0]}...")
+    rpt = generate(ctx, settings, stream=not no_stream)
+
+    ungrounded = ungrounded_figures(rpt.markdown, ctx)
+    _print_warnings(
+        ungrounded,
+        "Ungrounded figures in the narrative (verify before relying on them)",
+    )
+
+    out = output or _results_dir(ticker or "report") / "report.md"
+    out.write_text(rpt.markdown, encoding="utf-8")
+    console.print(rpt.markdown)
+    console.print(f"[green]Wrote {out}[/]")
+
+
+@app.command()
 def betas(
-    query: Optional[str] = typer.Argument(None, help="Case-insensitive substring to filter industries"),
+    query: Optional[str] = typer.Argument(
+        None, help="Case-insensitive substring to filter industries"
+    ),
     beta_file: Optional[Path] = typer.Option(
         None, "--beta-file", help="Damodaran beta .xls (default: betaemerg.xls)"
     ),

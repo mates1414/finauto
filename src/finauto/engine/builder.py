@@ -72,6 +72,12 @@ class WorkbookBuilder:
             s06_summary.build(ws6, ctx)
             wb.define_name("TargetPrice", f"='{S06}'!{s06_summary.TARGET_PRICE_CELL}")
 
+            # Harden the round-trip surface: lock every sheet so only the blue
+            # input cells (styled with locked=False) are editable. No password —
+            # protection is a guard rail, trivially removed in Excel if needed.
+            for ws in (ws1, ws2, ws3, ws4, ws5, ws6):
+                ws.protect("", {"objects": False, "scenarios": False})
+
             ws6.activate()
         finally:
             wb.close()

@@ -19,12 +19,19 @@ class Extractor(Protocol):
 
 
 def get_extractor(settings: Settings) -> Extractor:
-    if settings.llm_provider == "gemini":
+    # Resolve via the per-stage router so FINAUTO_EXTRACT_PROVIDER/_MODEL take
+    # effect; unset values fall back to the global llm_provider + default model.
+    provider, model = settings.stage("extract")
+    if provider == "gemini":
         from .gemini import GeminiExtractor
 
-        return GeminiExtractor(settings.gemini_model)
-    if settings.llm_provider == "claude":
+        return GeminiExtractor(model)
+    if provider == "claude":
         from .claude import ClaudeExtractor
 
-        return ClaudeExtractor(settings.claude_model)
-    raise ValueError(f"unknown LLM provider: {settings.llm_provider}")
+        return ClaudeExtractor(model)
+    if provider == "openai":
+        from .openai_compat import OpenAICompatExtractor
+
+        return OpenAICompatExtractor(model, base_url=settings.openai_base_url)
+    raise ValueError(f"unknown LLM provider: {provider}")

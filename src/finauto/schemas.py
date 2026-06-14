@@ -25,7 +25,9 @@ class IncomeStatement(BaseModel):
     revenue: Number = None
     cogs: Number = Field(None, description="Cost of goods sold, as a positive number")
     gross_profit: Number = None
-    sga: Number = Field(None, description="Operating/SG&A expenses, as a positive number")
+    sga: Number = Field(
+        None, description="Operating/SG&A expenses, as a positive number"
+    )
     ebitda: Number = None
     depreciation_amortization: Number = None
     ebit: Number = None
@@ -51,7 +53,9 @@ class BalanceSheet(BaseModel):
 
 class CashFlowItems(BaseModel):
     depreciation_amortization: Number = None
-    capex: Number = Field(None, description="Capital expenditures, as a positive number")
+    capex: Number = Field(
+        None, description="Capital expenditures, as a positive number"
+    )
 
 
 class FiscalYearData(BaseModel):
@@ -72,7 +76,10 @@ def _merge_periods(base: FiscalYearData, other: FiscalYearData) -> FiscalYearDat
         base_sec = getattr(merged, sec_name)
         other_sec = getattr(other, sec_name)
         for fname in type(base_sec).model_fields:
-            if getattr(base_sec, fname) is None and getattr(other_sec, fname) is not None:
+            if (
+                getattr(base_sec, fname) is None
+                and getattr(other_sec, fname) is not None
+            ):
                 setattr(base_sec, fname, getattr(other_sec, fname))
     return merged
 
@@ -180,7 +187,8 @@ class IndustryBeta(BaseModel):
     unlevered_beta: Number = None
     cash_firm_value: Number = None
     unlevered_beta_cash_adj: Number = Field(
-        None, description="Unlevered beta corrected for cash (Damodaran's pure-play beta)"
+        None,
+        description="Unlevered beta corrected for cash (Damodaran's pure-play beta)",
     )
     source: Optional[str] = None
 
@@ -200,7 +208,9 @@ class Assumptions(BaseModel):
     equity_risk_premium: float = 0.055
     country_risk_premium: float = 0.045
     tax_rate: float = 0.25
-    fx_rate: float = Field(1.0, description="Model currency per 1 unit of target currency, e.g. EUR/TRY")
+    fx_rate: float = Field(
+        1.0, description="Model currency per 1 unit of target currency, e.g. EUR/TRY"
+    )
     growth_stage1: float = 0.20
     growth_stage2: float = 0.10
     terminal_growth: float = 0.03
@@ -208,7 +218,9 @@ class Assumptions(BaseModel):
     capex_pct_sales: float = 0.06
     nwc_pct_sales: float = 0.02
     da_pct_sales: float = 0.05
-    rd_spread: float = Field(0.04, description="Cost-of-debt spread over the risk-free rate fallback")
+    rd_spread: float = Field(
+        0.04, description="Cost-of-debt spread over the risk-free rate fallback"
+    )
     weight_dcf: float = 0.70
     weight_multiples: float = 0.30
     signal_threshold: float = 0.15
@@ -220,5 +232,69 @@ class ValuationInputs(BaseModel):
     assumptions: Assumptions = Field(default_factory=Assumptions)
     locale: Literal["tr", "en"] = "tr"
     industry_beta: Optional[IndustryBeta] = Field(
-        None, description="Optional Damodaran sector beta sourcing the WACC's unlevered beta"
+        None,
+        description="Optional Damodaran sector beta sourcing the WACC's unlevered beta",
     )
+
+
+# --- Phase 3 contracts (peer discovery, Excel round-trip, strategic report) ---
+# These become API/DB payloads in the SaaS layer; keep them JSON-stable.
+
+
+class PeerCandidate(BaseModel):
+    """One peer proposed by the discovery stage, before/after live validation."""
+
+    name: str
+    ticker: Optional[str] = None
+    exchange: Optional[str] = None
+    rationale: Optional[str] = None
+    confidence: float = Field(0.0, ge=0.0, le=1.0, description="0..1 model confidence")
+    resolved: bool = Field(False, description="True after a successful Yahoo snapshot")
+    market_cap: Number = Field(
+        None, description="Filled on resolution, for sanity sort"
+    )
+
+
+class PeerSuggestionSet(BaseModel):
+    """Discovery output: validated candidates plus an audit trail of drops."""
+
+    target: str
+    candidates: list[PeerCandidate] = Field(default_factory=list)
+    dropped: list[str] = Field(
+        default_factory=list,
+        description="'<name>: <reason>' for each dropped candidate",
+    )
+    source: Optional[str] = Field(
+        None, description='e.g. "claude web_search 2026-06-13"'
+    )
+
+    def resolved(self) -> list[PeerCandidate]:
+        """Resolved candidates, largest market cap first (None caps sort last)."""
+        res = [c for c in self.candidates if c.resolved]
+        return sorted(res, key=lambda c: (c.market_cap is None, -(c.market_cap or 0.0)))
+
+    def tickers(self) -> list[str]:
+        """Resolved tickers, market-cap ordered — feeds the existing peer path."""
+        return [c.ticker for c in self.resolved() if c.ticker]
+
+
+class EditNote(BaseModel):
+    """One user correction discovered by diffing the edited workbook vs original."""
+
+    path: str = Field(
+        ..., description='Dotted path, e.g. "2025.income_statement.revenue"'
+    )
+    old: Number = None
+    new: Number = None
+
+
+class StrategicReport(BaseModel):
+    """The grounded narrative produced from the corrected workbook."""
+
+    ticker: str
+    markdown: str
+    grounded_figures: list[str] = Field(
+        default_factory=list,
+        description="Figures/cells the narrative is allowed to cite",
+    )
+    model: Optional[str] = None
