@@ -107,6 +107,32 @@ def _auto_peers(settings, *, ticker, name, sector, n, assume_yes) -> list[str]:
     return tickers
 
 
+def _fetch_kap_pdfs(ticker: str, year: int) -> list[Path]:
+    """Download a year's filings from KAP and pick the Turkish annual statement."""
+    from .ingestion.sources.base import SourceError, get_source
+    from .ingestion.sources.kap import select_statement_pdfs
+
+    dest = _results_dir(ticker) / "kap"
+    console.print(
+        f"Fetching {year} financial statements for [bold]{ticker}[/] from KAP..."
+    )
+    try:
+        files = get_source("kap").fetch(ticker, year=year, dest_dir=dest)
+    except (SourceError, ValueError) as e:
+        console.print(f"[red]KAP fetch failed:[/] {e}")
+        raise typer.Exit(code=1)
+    pdfs = select_statement_pdfs(files)
+    if not pdfs:
+        console.print(
+            "[red]No usable statement PDF in the KAP bundle; download manually and "
+            "pass the path(s) instead.[/]"
+        )
+        raise typer.Exit(code=1)
+    for p in pdfs:
+        console.print(f"  [green]selected:[/] {p.name}")
+    return pdfs
+
+
 def _run_extraction(settings, pdfs: list[Path], ticker: str):
     """Extract financials, turning expected failures into clean CLI errors."""
     from .ingestion.base import ExtractionError, get_extractor
@@ -279,10 +305,21 @@ def build(
 
 @app.command()
 def run(
-    pdfs: list[Path] = typer.Argument(
-        ..., exists=True, readable=True, help="Financial report PDF(s)"
+    pdfs: Optional[list[Path]] = typer.Argument(
+        None,
+        exists=True,
+        readable=True,
+        help="Financial report PDF(s) (omit with --from-kap)",
     ),
     ticker: str = typer.Option(..., "--ticker", "-t"),
+    from_kap: bool = typer.Option(
+        False,
+        "--from-kap",
+        help="Auto-download statements from KAP instead of passing PDFs",
+    ),
+    year: Optional[int] = typer.Option(
+        None, "--year", help="Financial year for --from-kap, e.g. 2024"
+    ),
     peers: Optional[str] = typer.Option(
         None, "--peers", "-p", help="Comma-separated peer tickers"
     ),
@@ -314,6 +351,14 @@ def run(
     settings = get_settings()
     if provider:
         settings.llm_provider = provider  # type: ignore[assignment]
+    if from_kap:
+        if year is None:
+            console.print("[red]--from-kap requires --year, e.g. --year 2024.[/]")
+            raise typer.Exit(code=2)
+        pdfs = _fetch_kap_pdfs(ticker, year)
+    elif not pdfs:
+        console.print("[red]Provide PDF path(s), or use --from-kap --year YYYY.[/]")
+        raise typer.Exit(code=2)
     if not peers and not auto_peers:
         console.print("[red]Provide --peers, or pass --auto-peers to discover them.[/]")
         raise typer.Exit(code=2)
@@ -474,6 +519,42 @@ def report(
     out.write_text(rpt.markdown, encoding="utf-8")
     console.print(rpt.markdown)
     console.print(f"[green]Wrote {out}[/]")
+
+
+@app.command()
+def fetch(
+    ticker: str = typer.Option(
+        ..., "--ticker", "-t", help="Target ticker, e.g. THYAO.IS"
+    ),
+    year: int = typer.Option(
+        ..., "--year", help="Financial year to download, e.g. 2024"
+    ),
+    source: str = typer.Option("kap", "--source", help="Data source: kap"),
+    output: Optional[Path] = typer.Option(
+        None,
+        "--output",
+        "-o",
+        help="Destination folder (default: results/<TICKER>/<source>)",
+    ),
+) -> None:
+    """Download financial-statement files for a ticker from a public source (KAP)."""
+    from .ingestion.sources.base import SourceError, get_source
+
+    dest = output or _results_dir(ticker) / source
+    console.print(
+        f"Fetching {year} financial statements for [bold]{ticker}[/] from {source}..."
+    )
+    try:
+        paths = get_source(source).fetch(ticker, year=year, dest_dir=dest)
+    except (SourceError, ValueError) as e:
+        console.print(f"[red]Fetch failed:[/] {e}")
+        raise typer.Exit(code=1)
+    for p in paths:
+        console.print(f"  [green]{p}[/]")
+    console.print(f"[green]Wrote {len(paths)} file(s) to {dest}[/]")
+    console.print(
+        "[dim]Note: post-2022 BIST statements are TMS-29/IAS-29 inflation-restated.[/]"
+    )
 
 
 @app.command()
